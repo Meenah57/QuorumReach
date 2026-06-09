@@ -20,8 +20,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-from rpc import RpcClient, RpcError, keccak_sig, decode_uint256, decode_address
+from rpc import RpcClient, RpcError, keccak_sig, decode_uint256, decode_address, _http_post_json
 
 
 # Snapshot Hub GraphQL endpoint (public, no API key needed for public spaces)
@@ -236,13 +235,11 @@ class SnapshotGovernor(Governor):
         self.space = space
 
     def _query(self, query: str, variables: Dict[str, Any]) -> Dict[str, Any]:
-        r = requests.post(
+        data = _http_post_json(
             SNAPSHOT_HUB,
-            json={"query": query, "variables": variables},
+            {"query": query, "variables": variables},
             timeout=30,
         )
-        r.raise_for_status()
-        data = r.json()
         if "errors" in data:
             raise RpcError(f"Snapshot: {data['errors']}")
         return data.get("data", {})

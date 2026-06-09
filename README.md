@@ -1,206 +1,180 @@
 # QuorumReach — Quorum Forecaster
 
-> Predict whether an on-chain or off-chain governance proposal will
-> reach quorum before its voting deadline closes.
+Predicts whether an on-chain or off-chain governance proposal will reach
+quorum before its voting deadline closes. Built for AI agents that need a
+quick yes/no on a governance call without writing five eth_call
+themselves.
 
-[![python](https://img.shields.io/badge/python-3.9%2B-blue)]()
-[![license](https://img.shields.io/badge/license-MIT--0-green)]()
-[![rpc](https://img.shields.io/badge/RPC-JSON--RPC%20%7C%20EVM-orange)]()
+Output is a single label (`MISSED` / `UNLIKELY` / `REACH_QUORUM` /
+`LIKELY` / `GUARANTEED`) plus a confidence score and a one-line
+explanation.
 
-## Overview
+Works for **on-chain governors** (OpenZeppelin Governor, Compound
+Bravo) and **off-chain governors** (Snapshot).
 
-QuorumReach reads live state from a governance contract (or a
-Snapshot space) and projects the final vote tally at deadline using
-a linear extrapolation seeded with the governor's own historical
-turnout. The output is a single, audit-friendly forecast label
-(`MISSED`, `UNLIKELY`, `REACH_QUORUM`, `LIKELY`, `GUARANTEED`) plus a
-confidence score and a human-readable explanation.
+## TL;DR for a total novice
 
-It works for:
-
-- **On-chain governors** — OpenZeppelin Governor and Compound Bravo.
-- **Off-chain governors** — Snapshot (most DAOs that don't pay gas
-  for voting).
-
-## Features
-
-- **On-chain forecast** — read proposal state, vote tallies, and
-  quorum threshold via `eth_call`. No web3 framework dependency.
-- **Snapshot support** — query the Snapshot Hub GraphQL API directly.
-- **Five-tier label** — `MISSED` / `UNLIKELY` / `REACH_QUORUM` /
-  `LIKELY` / `GUARANTEED` with calibrated confidence.
-- **History-aware soft cap** — the projection is bounded by the
-  governor's own historical maximum turnout to avoid runaway
-  extrapolation.
-- **Multi-format output** — text (default), JSON, Markdown, or HTML
-  via the `report.py` formatter.
-- **Agent-ready** — ships a `SKILL.md` at the repo root with the
-  invocation contract an agent runtime needs to drive the tool.
-- **Manual override** — supply `--quorum-absolute` when the governor
-  doesn't expose a usable quorum read (Snapshot %-of-supply cases,
-  custom DAOs).
-
-## Supported networks
-
-The tool runs against any EVM-compatible JSON-RPC endpoint for
-on-chain governors, and against the Snapshot Hub for off-chain ones.
-The following networks are explicitly supported out of the box and
-used in the examples below.
-
-| Network                 | Chain ID | RPC URL                              | Native token | Explorer                          |
-|-------------------------|----------|--------------------------------------|--------------|-----------------------------------|
-| Pharos Pacific Mainnet  | `1672`   | `https://rpc.pharos.xyz`             | PROS         | https://www.pharosscan.xyz/       |
-| Pharos Atlantic Testnet | `688689` | `https://atlantic.dplabs-internal.com` | PHRS         | https://atlantic.pharosscan.xyz/  |
-
-For off-chain governance, the Snapshot Hub is chain-agnostic:
-`https://hub.snapshot.org/graphql`.
-
-You can target either by passing the matching `--rpc-url` flag
-(see [Usage](#usage)).
-
-## Framework
-
-- **Language:** Python 3.9+
-- **RPC protocol:** JSON-RPC (`eth_call`, `eth_blockNumber`,
-  `eth_getLogs`, `eth_chainId`)
-- **Off-chain protocol:** GraphQL against the Snapshot Hub.
-- **External CLIs (optional):** `cast` from
-  [Foundry](https://book.getfoundry.xyz/) for manual cross-checks
-  of proposal state; `jq` for ergonomic RPC URL extraction in shell
-  pipelines.
-- **No web3 framework required** — the engine speaks JSON-RPC
-  directly over `requests` so it has the smallest possible install
-  footprint.
-
-## Dependencies
-
-Runtime (Python):
-
-- `requests>=2.31` — HTTP client used by `src/rpc.py` and the
-  Snapshot GraphQL client.
-
-External (only if you want the optional CLIs):
-
-- `cast` / `forge` — Foundry CLI (https://book.getfoundry.xyz/getting-started/installation).
-- `jq` — command-line JSON processor, used in README shell snippets.
-
-Everything is pinned in `requirements.txt` at the repo root.
-
-## Installation
+You need two things: Python (already installed on Termux from your
+earlier setup) and the code from this repo.
 
 ```bash
-# Clone
+# 1. Get the code
 git clone https://github.com/Meenah57/QuorumReach.git
 cd QuorumReach
 
-# Install Python dependency
-pip install -r requirements.txt
-
-# (Optional) install Foundry if you want cast/forge fallback
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
+# 2. Try it (no args needed — runs a sample forecast)
+python3 src/quorum_forecast.py --governor 0x4C70919472B8FE53924Fada6a562cD95089631B2 --proposal-id 42 --rpc-url https://rpc.pharos.xyz
 ```
 
-No build step. No native compilation.
+That's it. No `pip install`, no `npm install`, no `forge build`, no
+environment setup. The skill uses **only the Python standard library**.
 
-## Usage
+If you see a forecast line like `Forecast: REACH_QUORUM — confidence
+0.55 — ...`, the skill is working.
 
-### Forecast an on-chain proposal (Pharos mainnet)
+## Install
 
 ```bash
-python src/quorum_forecast.py \
-  --governor 0xGovernorContractAddress \
+git clone https://github.com/Meenah57/QuorumReach.git
+cd QuorumReach
+```
+
+**That's the whole install.** No dependencies, no build step. Just
+Python 3.9+ (which Termux already gives you) and this repo.
+
+If you previously saw `ModuleNotFoundError: No module named 'requests'`,
+that was a bug — the skill used to need the `requests` library, but
+it now uses Python's built-in `urllib.request` instead. So no `pip
+install` step is needed, ever.
+
+## How a beginner uses it — full walkthrough
+
+### Scenario: "I just want to see it work"
+
+```bash
+# 1. Get the code
+git clone https://github.com/Meenah57/QuorumReach.git
+cd QuorumReach
+
+# 2. Run a forecast
+python3 src/quorum_forecast.py \
+  --governor 0x4C70919472B8FE53924Fada6a562cD95089631B2 \
   --proposal-id 42 \
   --rpc-url https://rpc.pharos.xyz
 ```
 
-### Forecast an on-chain proposal (Pharos Atlantic testnet)
+The output will look like:
 
-```bash
-python src/quorum_forecast.py \
-  --governor 0xGovernorContractAddress \
-  --proposal-id 7 \
-  --rpc-url https://atlantic.dplabs-internal.com
+```
+Forecast: REACH_QUORUM — confidence 0.55 — ratio 0.875
+  projected 3,500,000 / quorum 4,000,000
+  50.0% elapsed, 50 blocks remaining
+  Linear extrapolation; close call.
 ```
 
-### Forecast a Snapshot proposal
+### Scenario: "Forecast a Snapshot (off-chain) proposal"
 
 ```bash
-python src/quorum_forecast.py \
+python3 src/quorum_forecast.py \
   --governor aave.eth \
   --proposal-id 0xProposalIdHere \
   --mode snapshot
 ```
 
-### Output as JSON, then format as Markdown
+### Scenario: "Get the result as JSON for my agent"
 
 ```bash
-python src/quorum_forecast.py \
-  --governor 0xGovernorContractAddress \
+python3 src/quorum_forecast.py \
+  --governor 0x4C70919472B8FE53924Fada6a562cD95089631B2 \
+  --proposal-id 42 \
+  --rpc-url https://rpc.pharos.xyz \
+  --format json
+```
+
+### Scenario: "Get a Markdown report"
+
+```bash
+python3 src/quorum_forecast.py \
+  --governor 0x4C70919472B8FE53924Fada6a562cD95089631B2 \
   --proposal-id 42 \
   --rpc-url https://rpc.pharos.xyz \
   --format json \
-  | python src/report.py --format markdown --out forecast.md
+  | python3 src/report.py --format markdown --out forecast.md
+
+cat forecast.md
 ```
 
-### Output as HTML
+## All command-line flags
 
-```bash
-python src/quorum_forecast.py \
-  --governor 0xGovernorContractAddress \
-  --proposal-id 42 \
-  --rpc-url https://rpc.pharos.xyz \
-  --format json \
-  | python src/report.py --format html --out forecast.html
+| Flag | Required | Default | What it does |
+|---|---|---|---|
+| `--governor` | yes | — | Governor address (0x…) or Snapshot space (aave.eth) |
+| `--proposal-id` | yes | — | Proposal id (any string) |
+| `--rpc-url` | for on-chain | — | JSON-RPC endpoint (e.g. `https://rpc.pharos.xyz`) |
+| `--mode` | no | auto | `auto`, `onchain`, or `snapshot` |
+| `--lookback` | no | 8 | How many past proposals to use as a soft cap |
+| `--quorum-absolute` | no | — | Override quorum threshold (raw token units) |
+| `--format` | no | text | `text`, `json`, `markdown`, or `html` |
+| `--out` | no | stdout | Output file (`-` for stdout) |
+
+## Supported networks
+
+| Network | Chain ID | RPC |
+|---|---:|---|
+| Pharos Pacific Mainnet | 1672 | `https://rpc.pharos.xyz` |
+| Pharos Atlantic Testnet | 688689 | `https://atlantic.dplabs-internal.com` |
+
+The skill works against **any EVM JSON-RPC endpoint** — just pass
+`--rpc-url`. For off-chain, the Snapshot Hub is chain-agnostic
+(`https://hub.snapshot.org/graphql`).
+
+## How the math works
+
+1. Read proposal state via `eth_call` (proposalVotes, proposalDeadline,
+   proposalSnapshot, quorum, votingPeriod, votingDelay)
+2. Compute time-elapsed / time-remaining ratio
+3. Linear-extrapolate current votes to the deadline
+4. Cap the projection at the governor's historical maximum turnout
+5. Compare projection to quorum threshold
+6. Map to a label: `MISSED` / `UNLIKELY` / `REACH_QUORUM` / `LIKELY` /
+   `GUARANTEED`
+7. Assign a confidence score (0.0 - 1.0) based on time-elapsed and
+   historical volatility
+
+Full math: `references/forecasting-model.md`. Full selector table:
+`references/governors.md`.
+
+## Use as a Python library (from inside an agent)
+
+```python
+import sys
+sys.path.insert(0, "src")
+from quorum_forecast import forecast
+
+result = forecast(
+    governor="0x4C70919472B8FE53924Fada6a562cD95089631B2",
+    proposal_id="42",
+    rpc_url="https://rpc.pharos.xyz",
+)
+print(result.label, result.confidence, result.explanation)
 ```
-
-### Override the quorum threshold manually
-
-```bash
-python src/quorum_forecast.py \
-  --governor 0xGovernorContractAddress \
-  --proposal-id 42 \
-  --rpc-url https://rpc.pharos.xyz \
-  --quorum-absolute 4000000
-```
-
-### Command-line flags
-
-| Flag                 | Required | Default | Description                                  |
-|----------------------|----------|---------|----------------------------------------------|
-| `--governor`         | yes      | —       | Governor address (0x…) or Snapshot space     |
-| `--proposal-id`      | yes      | —       | Proposal id (string)                         |
-| `--rpc-url`          | depends  | —       | JSON-RPC endpoint (required for on-chain)    |
-| `--mode`             | no       | auto    | `auto`, `onchain`, or `snapshot`             |
-| `--lookback`         | no       | 8       | How many past proposals to use as a soft cap |
-| `--quorum-absolute`  | no       | —       | Override quorum threshold (raw token units)  |
-| `--format`           | no       | text    | `text`, `json`, `markdown`, `html`           |
-| `--out`              | no       | -       | Output file (`-` for stdout)                 |
-
-### Sample output
-
-See `examples/sample-output.md` for what a real forecast looks like.
 
 ## AI Agent Integration
 
-This repository ships a `SKILL.md` at the root that any agent
-runtime can load to discover the skill. The flow is:
+This repo ships a `SKILL.md` at the root that any agent runtime can
+load to discover the skill. A typical flow:
 
-1. The agent reads `SKILL.md` to learn the capability and required
-   arguments (`--governor`, `--proposal-id`, optionally `--rpc-url`).
-2. The agent determines the mode (on-chain vs Snapshot). If the
-   user supplied a 0x address, the engine auto-detects on-chain.
-3. The agent runs `python src/quorum_forecast.py` with the
-   parameters and captures stdout (or `--out` to a file).
-4. The agent surfaces the forecast label, confidence, ratio, and
-   time-remaining as the top of its reply.
-5. If a formatted report is needed, the agent pipes the JSON output
-   through `python src/report.py --format <fmt>`.
+1. Agent reads `SKILL.md` to learn the capability and required args
+2. Agent determines the mode (on-chain vs Snapshot)
+3. Agent runs `python3 src/quorum_forecast.py` and captures stdout
+4. Agent surfaces the forecast label + confidence as the top of its
+   reply
 
-A typical prompt that triggers the skill:
+A typical prompt:
 
 > "Will Pharos governance proposal #42 reach quorum? Governor is
-> `0xGovernorContract`, RPC is `https://rpc.pharos.xyz`."
+> `0x4C70919472B8FE53924Fada6a562cD95089631B2`, RPC is
+> `https://rpc.pharos.xyz`."
 
 A typical reply:
 
@@ -215,12 +189,11 @@ QuorumReach/
 ├── SKILL.md                       # Agent-facing skill spec
 ├── README.md                      # This file
 ├── LICENSE                        # MIT-0
-├── requirements.txt
 ├── src/
 │   ├── quorum_forecast.py         # CLI entry point
 │   ├── governors.py               # On-chain + Snapshot interfaces
 │   ├── forecaster.py              # Projection engine
-│   ├── rpc.py                     # JSON-RPC client
+│   ├── rpc.py                     # JSON-RPC client (stdlib only)
 │   └── report.py                  # Text / JSON / Markdown / HTML formatter
 ├── references/
 │   ├── governors.md               # Supported governors + selectors
@@ -229,35 +202,16 @@ QuorumReach/
     └── sample-output.md           # What a real forecast looks like
 ```
 
-## How detection works
+## Dependencies
 
-See `references/forecasting-model.md` for the math, label
-thresholds, and confidence calibration. See
-`references/governors.md` for the supported ABI selectors and how
-to add a new governor.
+**Zero.** Pure Python standard library — no `pip install`, no
+`requests`, no `web3`, no Foundry. Just `urllib.request`, `json`, and
+`dataclasses` from the standard library.
 
-## Roadmap
-
-- [ ] Add a `--governor-type` flag to force Compound Bravo routing.
-- [ ] Index `VoteCast` events to learn a per-DAO voting shape prior
-  (replaces the current linear extrapolation).
-- [ ] Bayesian posterior over historical curves for tighter
-  confidence intervals.
-- [ ] Auto-detect Pharos-native governance contracts when they ship.
-
-## Contributing
-
-PRs welcome — especially new governor implementations, additional
-DEI strategy types for Snapshot, and benchmarks against real
-proposals.
+(An earlier version of this repo needed `requests`; that's been
+removed. If you previously got `ModuleNotFoundError: No module named
+'requests'`, just `git pull` — the bug is fixed.)
 
 ## License
 
-[MIT-0](https://opensource.org/licenses/MIT-0) — free to use, modify,
-redistribute. No attribution required.
-
----
-
-**Author:** Meenah57
-**Built with:** Python 3.9+, plain JSON-RPC, and a healthy distrust
-of last-minute whale votes.
+MIT-0 — free to use, modify, redistribute. No attribution required.
