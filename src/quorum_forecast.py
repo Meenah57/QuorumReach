@@ -46,6 +46,61 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
     if mode == "auto":
         mode = detect_mode(args.governor)
 
+    # `demo` mode: synthetic proposal, no RPC, no Governor address needed.
+    # Returns a clean sample forecast so users can verify the tool works
+    # end-to-end without finding a real governance contract.
+    if mode == "demo":
+        from forecaster import forecast as _forecast
+        from governors import ProposalState
+        # A synthetic OZ-Governor-shaped proposal: 3.5M of 4M quorum, 50% elapsed.
+        # Project to 3.85M at deadline -> REACH_QUORUM, low confidence.
+        import time as _time
+        now = int(_time.time())
+        synthetic = ProposalState(
+            proposal_id="demo",
+            governor="synthetic.example",
+            for_votes=3_500_000,
+            against_votes=120_000,
+            abstain_votes=80_000,
+            quorum=4_000_000,
+            start_block=None,
+            end_block=None,
+            start_ts=now - 3600 * 24 * 3,
+            end_ts=now + 3600 * 24 * 3,
+            state=1,  # active
+            proposer="synthetic",
+        )
+        fc = _forecast(synthetic, history=[], head_block=None, now_ts=now, quorum_override=None)
+        return {
+            "governor": {
+                "name": "synthetic",
+                "address_or_space": "synthetic.example",
+                "chain_id": None,
+                "mode": "demo",
+            },
+            "proposal": {
+                "proposal_id": "demo",
+                "for_votes": synthetic.for_votes,
+                "against_votes": synthetic.against_votes,
+                "abstain_votes": synthetic.abstain_votes,
+                "quorum": synthetic.quorum,
+                "state_int": None,
+                "proposer": "synthetic",
+            },
+            "forecast": {
+                "label": fc.label,
+                "confidence": fc.confidence,
+                "ratio": fc.ratio,
+                "projected_total": fc.projected_total,
+                "quorum": fc.quorum,
+                "current_total": fc.current_total,
+                "elapsed_fraction": fc.elapsed_fraction,
+                "time_remaining": fc.time_remaining,
+                "model": fc.model,
+                "explanation": fc.explanation,
+            },
+        }
+
     rpc: RpcClient = None  # type: ignore
     if mode == "onchain":
         if not args.rpc_url:
@@ -119,13 +174,14 @@ def main():
     p = argparse.ArgumentParser(
         description="Forecast whether a governance proposal will reach quorum."
     )
-    p.add_argument("--governor", required=True,
-                   help="Governor contract address (0x…) or Snapshot space (e.g. aave.eth)")
-    p.add_argument("--proposal-id", required=True,
-                   help="Proposal id (uint256 as string for on-chain, or Snapshot id)")
+    p.add_argument("--governor", required=False, default="",
+                   help="Governor contract address (0x…) or Snapshot space (e.g. aave.eth). Not required for --mode demo.")
+    p.add_argument("--proposal-id", required=False, default="",
+                   help="Proposal id (uint256 as string for on-chain, or Snapshot id). Not required for --mode demo.")
     p.add_argument("--rpc-url", default=None,
                    help="JSON-RPC endpoint (required for on-chain mode)")
-    p.add_argument("--mode", choices=["auto", "onchain", "snapshot"], default="auto")
+    p.add_argument("--mode", choices=["auto", "onchain", "snapshot", "demo"], default="auto",
+                   help="`demo` runs a synthetic forecast with no RPC call — useful for sanity checks and demos")
     p.add_argument("--lookback", type=int, default=8,
                    help="How many past proposals to use as shape prior (default 8)")
     p.add_argument("--quorum-absolute", type=int, default=None,
