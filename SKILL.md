@@ -12,12 +12,9 @@ description: >
   JSON-RPC (any EVM-compatible chain) and the Snapshot GraphQL API
   (off-chain governance).
   Do not attempt quorum forecasting without reading this skill.
-version: 0.1.0
-requires:
-  - python >= 3.9
-  - requests
-  - anyBins:
-      - cast   # optional, used for manual cross-check of proposal state
+version: 2.0.0
+requires: read
+bins: [bash, cast, jq]
       - jq     # optional, used for ergonomic RPC URL extraction
 author: Meenah57
 bins: [python3]
