@@ -11,18 +11,37 @@ explanation.
 
 ## Install
 
+### 1. Install Foundry (the engine the skill is built on)
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+Verify with `cast --version`. This gives you `cast`, `forge`, `anvil`, and `chisel` on your `$PATH`.
+
+### 2. Install jq (used to parse JSON)
+
+```bash
+# macOS
+brew install jq
+# Debian/Ubuntu/Termux
+apt install -y jq
+# Alpine
+apk add jq
+```
+
+Verify with `jq --version`.
+
+### 3. Get the skill
+
 ```bash
 git clone https://github.com/Meenah57/QuorumReach
 cd QuorumReach
+chmod +x scripts/*.sh
 ```
 
-That's the whole install. **No `pip install`, no `npm install`, no
-`forge build`.** The skill uses only the Python standard library
-(`urllib.request` for HTTP, `json`/`dataclasses` for everything else).
-If you previously got `ModuleNotFoundError: No module named 'requests'`,
-that bug is fixed — the skill used to depend on `requests` and no
-longer does.
-
+That's it. No `pip install`, no `npm install`, no `forge build`, no compile. The skill is one or more bash scripts that use `cast` (from Foundry) for every RPC read. The `assets/networks.json` file already knows the Pharos Pacific Mainnet and Atlantic Testnet endpoints.
 ## Usage
 
 ### Forecast an on-chain proposal (any EVM RPC)
