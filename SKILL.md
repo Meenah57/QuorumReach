@@ -15,9 +15,8 @@ description: >
 version: 2.0.0
 requires: read
 bins: [bash, cast, jq]
-      - jq     # optional, used for ergonomic RPC URL extraction
 author: Meenah57
-bins: [python3]
+
 tags: [pharos, blockchain, agent-skill]
 agents: [claude, codex, gemini, openclaw]
 ---
