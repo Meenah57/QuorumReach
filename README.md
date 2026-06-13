@@ -1,284 +1,310 @@
 # QuorumReach — Quorum Forecaster
 
-Predicts whether an on-chain or off-chain governance proposal will reach
-quorum before its voting deadline closes. Works for **OpenZeppelin
-Governor** and **Compound Bravo** contracts on any EVM chain, plus
-**Snapshot** off-chain spaces.
+> Predict whether a governance proposal will reach quorum before its voting deadline closes — on-chain (OZ Governor / Compound Bravo) or off-chain (Snapshot).
 
-The output is a single label (`MISSED` / `UNLIKELY` / `REACH_QUORUM` /
-`LIKELY` / `GUARANTEED`) plus a confidence score and a one-line
-explanation.
+[![foundry](https://img.shields.io/badge/built%20with-Foundry-orange)]()
+[![bash](https://img.shields.io/badge/script-bash-blue)]()
+[![license](https://img.shields.io/badge/license-MIT-green)]()
+[![pharos](https://img.shields.io/badge/network-Pharos-blueviolet)]()
+[![ai-agent](https://img.shields.io/badge/callable%20by-AI%20agent-purple)]()
+
+## What it is
+
+This is a **skill built for the Pharos network** — a self-contained, deterministic bash script that runs on top of the [Pharos](https://pharos.network) EVM chains. It is **not** an AI agent itself, and not a chatbot. It is a single bash script that:
+
+- takes input from the caller via CLI flags,
+- reads live on-chain data from Pharos via `cast` (Foundry),
+- runs its own scoring/heuristic logic in pure bash + `awk` + `jq`,
+- prints a structured report (text or JSON) to stdout.
+
+Reads the proposal's current vote tallies (for / against / abstain), quorum threshold, and the live block head via `cast`, computes the elapsed fraction of the voting period, and projects the final turnout with a linear extrapolation (or a history mean when voting just started). Emits a single label (`MISSED` / `UNLIKELY` / `REACH_QUORUM` / `LIKELY` / `GUARANTEED`) plus a confidence score and a one-line explanation. Three modes: `onchain` (default), `demo` (synthetic), and `snapshot` (stub — extend it).
+
+## How it scores
+
+Let `elapsed = (head - start) / (end - start)` ∈ [0, 1].
+
+| Case | Projection |
+|---|---|
+| `elapsed < 0.001` (voting just started) | current votes (history mean is a stub in this version) |
+| `elapsed >= 0.001` | **linear extrapolation**: `projected = current / elapsed` |
+
+The label is a function of `ratio = projected / quorum`:
+
+| Ratio range | Label | Confidence |
+|---|---|---|
+| 0.00 – 0.25 | `MISSED` | 0.90 |
+| 0.25 – 0.75 | `UNLIKELY` | 0.70 |
+| 0.75 – 1.00 | `REACH_QUORUM` | 0.55 |
+| 1.00 – 1.30 | `LIKELY` | 0.75 |
+| 1.30+ | `GUARANTEED` | 0.90 |
+
+The asymmetric confidence (lower in the 0.75–1.00 band) reflects that the closer to the threshold, the more a single whale can tip the result either way. See `references/forecasting-model.md` for the full rationale.
+
+## Use it from an AI agent
+
+This skill is designed to be **called by an AI agent** (a Claude Code / Codex / Cursor agent, the Pharos Agent Center, or any custom LLM agent). The agent reads `SKILL.md` to discover the skill's flags, fills them in based on the user's request, and runs the bash script in its sandbox. The agent's job is just to translate "will proposal 42 reach quorum?" into `bash scripts/forecast.sh --mode onchain --governor 0x... --proposal-id 42`.
+
+Typical agent-side flow:
+
+```text
+User -> Agent: "Will proposal 42 on this Governor reach quorum?"
+Agent -> looks up SKILL.md for QuorumReach — Quorum Forecaster
+Agent -> picks the right flag combo: --mode onchain --governor 0x... --proposal-id 42
+Agent -> runs: bash scripts/forecast.sh --mode onchain --governor 0x... --proposal-id 42
+Agent -> reads the verdict, presents the label + confidence to the user
+```
+
+The script prints structured output to stdout and human-readable progress to stderr, so the agent can parse the stdout cleanly (with `jq`) without being polluted by progress messages.
 
 ## Install
 
-### 1. Install Foundry (the engine the skill is built on)
+You need three things: **Foundry** (for `cast`), **jq** (for JSON pretty-printing), and **git** (to clone the repo).
 
 ```bash
+# 1. Install Foundry (gives you cast, forge, anvil, chisel)
 curl -L https://foundry.paradigm.xyz | bash
 foundryup
-```
+# Reload your shell so the new commands are on PATH:
+exec $SHELL
+cast --version   # should print 1.x or higher
 
-Verify with `cast --version`. This gives you `cast`, `forge`, `anvil`, and `chisel` on your `$PATH`.
+# 2. Install jq (required for --json output)
+# macOS:   brew install jq
+# Ubuntu:  sudo apt-get install -y jq
+# Alpine:  apk add jq
+jq --version
 
-### 2. Install jq (used to parse JSON)
-
-```bash
-# macOS
-brew install jq
-# Debian/Ubuntu/Termux
-apt install -y jq
-# Alpine
-apk add jq
-```
-
-Verify with `jq --version`.
-
-### 3. Get the skill
-
-```bash
-git clone https://github.com/Meenah57/QuorumReach
+# 3. Clone this repo
+git clone https://github.com/Meenah57/QuorumReach.git
 cd QuorumReach
-chmod +x scripts/*.sh
+chmod +x scripts/*.sh tests/*.sh
 ```
 
-That's it. No `pip install`, no `npm install`, no `forge build`, no compile. The skill is one or more bash scripts that use `cast` (from Foundry) for every RPC read. The `assets/networks.json` file already knows the Pharos Pacific Mainnet and Atlantic Testnet endpoints.
-## Quick test (try it in 30 seconds)
-
-After the 3-step install above, run the demo mode (no private key, no RPC, no setup):
+## Quick test (30 seconds, no API keys needed)
 
 ```bash
 bash scripts/forecast.sh --mode demo
 ```
 
-You should see a printed report. The demo uses synthetic data, so it works offline.
+The first time you run this, the script prints a synthetic forecast — no cast, no RPC, no setup needed.
 
-To run a real check on a Pharos transaction, wallet, or token, replace the placeholder:
-
-```bash
-bash scripts/forecast.sh --governor 0xGOVERNOR --proposal-id 42
-```
-
-## Use in an AI agent (Claude Code / Codex / OpenClaw / Pharos Agent Center)
-
-The skill ships with a `SKILL.md` that AI agents auto-load. Once installed in your agent, just ask in natural language — the agent will read `SKILL.md` and run the bash script for you.
-
-```text
-"Will proposal 42 on this Governor reach quorum before the vote closes?"
-```
-
-The agent will run `bash scripts/forecast.sh --mode demo` (or the live command with the address you gave) and read the result back to you.
-
-### Install in your agent
-
-**Option A — Pharos Agent Center** (one-line install):
-
-```bash
-# from inside any agent that has the Pharos Agent Center CLI
-pharos-skill install https://github.com/Meenah57/QuorumReach
-```
-
-**Option B — OpenClaw / Claude Code / Codex** (one-line via npm):
-
-```bash
-npx skills add https://github.com/Meenah57/QuorumReach
-```
-
-**Option C — Manual install** (drop into your agent's skills directory):
-
-```bash
-# Clone the skill
-git clone https://github.com/Meenah57/QuorumReach
-cd QuorumReach
-
-# Claude Code: copy to ~/.claude/skills/
-mkdir -p ~/.claude/skills/QuorumReach
-cp -r . ~/.claude/skills/QuorumReach/
-
-# Codex: copy to ~/.codex/skills/
-mkdir -p ~/.codex/skills/QuorumReach
-cp -r . ~/.codex/skills/QuorumReach/
-
-# OpenClaw: copy to ~/.openclaw/skills/
-mkdir -p ~/.openclaw/skills/QuorumReach
-cp -r . ~/.openclaw/skills/QuorumReach/
-
-# Then restart the agent — the skill will be auto-loaded.
-```
 ## Usage
 
-### Forecast an on-chain proposal (any EVM RPC)
-
 ```bash
-python3 src/quorum_forecast.py \
-  --governor 0xGOVERNOR_ADDRESS \
-  --proposal-id 42 \
-  --rpc-url https://rpc.pharos.xyz
+# Forecast a proposal on a real OZ Governor (mainnet)
+bash scripts/forecast.sh --mode onchain \
+  --governor 0xGOVERNOR_ADDRESS --proposal-id 42 --chain mainnet
+
+# Demo mode (no cast or RPC needed)
+bash scripts/forecast.sh --mode demo
+
+# Output as JSON (for an agent)
+bash scripts/forecast.sh --mode onchain --governor 0xADDR --proposal-id 42 --json
+
+# Override the quorum threshold manually
+bash scripts/forecast.sh --mode onchain --governor 0xADDR --proposal-id 42 \
+  --quorum-absolute 4000000
+
+# Testnet
+bash scripts/forecast.sh --mode onchain --governor 0xADDR --proposal-id 42 --chain testnet
 ```
 
-### Forecast a Snapshot (off-chain) proposal
+### All flags
 
-```bash
-python3 src/quorum_forecast.py \
-  --governor aave.eth \
-  --proposal-id 0xPROPOSAL_ID \
-  --mode snapshot
+```
+--mode <onchain|demo|snapshot> --governor 0xADDR --proposal-id N --chain <mainnet|testnet> --lookback N --quorum-absolute N --json
 ```
 
-### Output formats
+| Flag | Description |
+|---|---|
+| `--mode <onchain \| demo \| snapshot>` | Forecasting mode (default: onchain) |
+| `--governor 0xADDR` | On-chain governor contract address (required for onchain) |
+| `--proposal-id N` | Proposal id as a non-negative integer (required for onchain) |
+| `--chain mainnet \| testnet` | Pharos chain to read from (default: mainnet) |
+| `--lookback N` | Number of past proposals to use for soft cap (default: 5; history mean is currently a stub) |
+| `--quorum-absolute N` | Override the on-chain quorum (raw token units) |
+| `--json` | Output as JSON (for agent consumption) |
+| `-h`, `--help` | Show the help text |
 
-```bash
-# JSON, for an agent
-python3 src/quorum_forecast.py --governor 0x... --proposal-id 42 \
-  --rpc-url https://rpc.pharos.xyz --format json
+## Supported governors
 
-# Markdown report, saved to a file
-python3 src/quorum_forecast.py --governor 0x... --proposal-id 42 \
-  --rpc-url https://rpc.pharos.xyz --format json \
-  | python3 src/report.py --format markdown --out forecast.md
-```
+The onchain mode reads these selectors via `cast call`:
 
-### Command-line flags
+**OpenZeppelin Governor** (default):
 
-| Flag | Required | Default | What it does |
-|---|---|---|---|
-| `--governor` | yes | — | Governor address (0x…) or Snapshot space |
-| `--proposal-id` | yes | — | Proposal id (string) |
-| `--rpc-url` | for on-chain | — | JSON-RPC endpoint |
-| `--mode` | no | auto | `auto`, `onchain`, or `snapshot` |
-| `--lookback` | no | 8 | Past proposals used as a soft cap |
-| `--quorum-absolute` | no | — | Override quorum threshold (raw token units) |
-| `--format` | no | text | `text`, `json`, `markdown`, or `html` |
-| `--out` | no | stdout | Output file (`-` for stdout) |
+| Function | Selector |
+|---|---|
+| `state(uint256)` | `0x3e4f49e6` |
+| `proposalVotes(uint256)` | `0xda95691a` |
+| `proposalSnapshot(uint256)` | `0x462aca47` |
+| `proposalDeadline(uint256)` | `0x2e03ce1b` |
+| `quorum(uint256)` | `0xf8ce5601` |
+
+**Compound Bravo** (`GovernorAlpha` / `GovernorBravo`):
+
+| Function | Selector |
+|---|---|
+| `proposals(uint256)` | `0x7d5d6a93` |
+| `state(uint256)` | `0x3e4f49e6` |
+| `quorumVotes()` | `0x973ab343` |
+
+**Snapshot** (off-chain): stub in this version. Extend the script with a Snapshot Hub GraphQL query against `https://hub.snapshot.org/graphql`.
+
+See `references/governors.md` for the full list and how to add a new governor type.
 
 ## Networks
 
-| Network | Chain ID | RPC |
-|---|---:|---|
-| Pharos Pacific Mainnet | 1672 | `https://rpc.pharos.xyz` |
-| Pharos Atlantic Testnet | 688689 | `https://atlantic.dplabs-internal.com` |
+The skill is built to run against the Pharos EVM chains. The chain config is stored in `assets/networks.json` and read at startup — no hardcoded URLs in the script.
 
-The skill works against **any EVM JSON-RPC endpoint** — just pass
-`--rpc-url`. For off-chain, the Snapshot Hub is chain-agnostic
-(`https://hub.snapshot.org/graphql`).
+| Network | Chain ID | RPC URL | Default |
+|---|---:|---|:---:|
+| mainnet (Pacific Ocean) | 1672 | `https://rpc.pharos.xyz` | ✓ |
+| atlantic-testnet | 688689 | `https://atlantic.dplabs-internal.com` |  |
 
-## How the math works
+The script defaults to mainnet. Pass `--chain testnet` to use the testnet instead. You can also override the RPC URL by editing `assets/networks.json`.
 
-1. Read proposal state via `eth_call` (`proposalVotes`,
-   `proposalDeadline`, `proposalSnapshot`, `quorum`, `votingPeriod`,
-   `votingDelay`)
-2. Compute time-elapsed / time-remaining ratio
-3. Linear-extrapolate current votes to the deadline
-4. Cap the projection at the governor's historical maximum turnout
-5. Compare projection to quorum threshold
-6. Map to a label: `MISSED` / `UNLIKELY` / `REACH_QUORUM` / `LIKELY` /
-   `GUARANTEED`
-7. Confidence score (0.0 - 1.0) from time-elapsed and historical
-   volatility
+## Set it up in an AI agent
 
-Full math: `references/forecasting-model.md`. Full selector table:
-`references/governors.md`.
+Three install paths for any AI agent that wants to call this skill.
 
-## Use as a Python library (from inside an agent)
+### Path A — Pharos Agent Center (for the official Pharos LLM agent)
 
-```python
-import sys
-sys.path.insert(0, "src")
-from quorum_forecast import forecast
+The Pharos Agent Center is the official agent runtime for the Pharos network. It reads `SKILL.md` from any skill repo to discover capabilities, dependencies, and required flags.
 
-result = forecast(
-    governor="0xGOVERNOR_ADDRESS",
-    proposal_id="42",
-    rpc_url="https://rpc.pharos.xyz",
-)
-print(result.label, result.confidence, result.explanation)
+1. **Copy the skill into the Agent Center's skills directory:**
+   ```bash
+   # After cloning this repo:
+   cp -r scripts assets references examples SKILL.md README.md foundry.toml LICENSE \
+     ~/.pharos/agent-center/skills/QuorumReach/
+   ```
+
+2. **Reload the Agent Center's skill registry:**
+   ```bash
+   pharos-agent reload-skills
+   # or restart the Agent Center daemon
+   ```
+
+3. **Invoke from the agent's chat UI** (or via the Agent Center's CLI / API):
+   ```text
+   User: "Will proposal 42 on this Governor reach quorum before the vote closes?"
+   Agent Center: loads QuorumReach — Quorum Forecaster, runs:
+     bash ~/.pharos/agent-center/skills/QuorumReach/scripts/forecast.sh --mode onchain --governor 0xADDR --proposal-id N --chain mainnet
+   ```
+
+### Path B — `npx skills add` (for Claude Code, Cursor, Codex, generic MCP agents)
+
+```bash
+npx skills add https://github.com/Meenah57/QuorumReach --skill QuorumReach
 ```
 
-## AI Agent Integration
+The agent's `skills` plugin will discover the SKILL.md, surface the skill in its tool list, and let the LLM pick the right flags when the user asks.
 
-This repo ships a `SKILL.md` at the root that any agent runtime can
-load to discover the skill. A typical flow:
+### Path C — Manual copy (any agent that reads `~/.claude/skills/`)
 
-1. Agent reads `SKILL.md` to learn the capability and required args
-2. Agent determines the mode (on-chain vs Snapshot)
-3. Agent runs `python3 src/quorum_forecast.py` and captures stdout
-4. Agent surfaces the forecast label + confidence as the top of its
-   reply
-
-A typical reply:
-
-> **Forecast: REACH_QUORUM** — confidence 0.55 — ratio 0.875 —
-> projected 3,500,000 / quorum 4,000,000 — 50.0% elapsed, 50 blocks
-> remaining. Linear extrapolation; close call.
-
-## Repository layout
-
-```
-QuorumReach/
-├── SKILL.md                       # Agent-facing skill spec
-├── README.md                      # This file
-├── LICENSE                        # MIT-0
-├── src/
-│   ├── quorum_forecast.py         # CLI entry point
-│   ├── governors.py               # On-chain + Snapshot interfaces
-│   ├── forecaster.py              # Projection engine
-│   ├── rpc.py                     # JSON-RPC client (stdlib only)
-│   └── report.py                  # Text / JSON / Markdown / HTML formatter
-├── references/
-│   ├── governors.md               # Supported governors + selectors
-│   └── forecasting-model.md       # Math + scoring rules
-└── examples/
-    └── sample-output.md           # What a real forecast looks like
+```bash
+mkdir -p ~/.claude/skills/QuorumReach
+cp -r scripts assets references examples SKILL.md README.md foundry.toml LICENSE ~/.claude/skills/QuorumReach/
 ```
 
-## Dependencies
+Restart the agent. It will pick up the new skill on next tool discovery.
 
-**Zero.** Pure Python standard library — no `requests`, no `web3`, no
-Foundry. Just `urllib.request`, `json`, and `dataclasses`.
+### Path D — Direct invocation (shell agents, cron jobs, CI pipelines)
 
+```bash
+bash scripts/forecast.sh --mode demo
+```
+
+No agent needed — just shell + Foundry.
+
+### What the agent says to invoke this skill
+
+| Caller says | Script invocation |
+|---|---|
+| Forecast proposal `42` on OZ Governor `0xabc...` on Pharos mainnet | `bash scripts/forecast.sh --mode onchain --governor 0xabc... --proposal-id 42 --chain mainnet` |
+| Run the quorum forecaster demo | `bash scripts/forecast.sh --mode demo` |
+| Forecast and return JSON for an agent | `bash scripts/forecast.sh --mode onchain --governor 0xabc... --proposal-id 42 --json` |
+| "Run the demo" | `bash scripts/forecast.sh --mode demo` |
+
+The agent should read the script's `--help` output to discover all available flags, then build the right command line for the user's request.
+
+## Security model
+
+The skill is **read-only by design**:
+
+- The script never imports, reads, or stores a private key.
+- It reads governance state via `eth_call` (read-only RPC) — it cannot move funds or vote on proposals.
+- It never submits a transaction, never writes to disk, never phones home.
+- The only network call is to the user-configured RPC URL (or the Snapshot Hub GraphQL endpoint, if you extend the snapshot mode).
 
 ## Framework
 
-| Layer | Tool |
-|---|---|
-| Engine | bash + Foundry `cast` |
-| JSON parsing | `jq` |
-| Chain config | `assets/networks.json` (Pharos Skill Engine schema) |
-| Skill loader | Pharos Agent Center / Claude Code / Codex / OpenClaw |
-
-The skill is a thin bash wrapper that calls `cast` for every RPC read. No contracts are deployed, no private keys required.
+| Layer | Tech | Purpose |
+|---|---|---|
+| Engine | **bash 4+** | Script host (single file per skill) |
+| RPC client | **Foundry / cast** | All chain reads — `cast call` for state, proposalVotes, proposalSnapshot, proposalDeadline, quorum |
+| Chain config | **JSON** (`assets/networks.json`) | Network endpoints + chain IDs |
+| Data format | **JSON** | Cast's native output; `jq` used for pretty-printing and JSON building |
+| Math | **awk** | Float division for elapsed fraction and ratio (bash only does integer) |
+| Runtime | Any POSIX shell, Foundry 1.0+ | Tested on Linux + macOS |
 
 ## Dependencies
 
-| Dependency | Required? | Notes |
-|---|---|---|
-| `cast` (Foundry) | **Yes** | `curl -L https://foundry.paradigm.xyz \| bash && foundryup` |
-| `jq` | **Yes** | `apt install -y jq` or `brew install jq` |
-| `bash` ≥ 4.0 | **Yes** | Ships with every Linux/macOS/WSL |
-| `git` | Yes | To clone the repo |
-| Python | **No** | Skill is bash-only |
-| Node.js | **No** | Skill is bash-only |
+**Required:**
+- [Foundry](https://getfoundry.sh) (gives you `cast`, `forge`, `anvil`)
+- `bash` 4+ (preinstalled on macOS, Ubuntu 20+, most Linux)
+- `awk` (preinstalled on every Unix)
+- `jq` (for `--json` output)
+
+**Optional:**
+- `git` — only required if you're cloning the repo (you already have it)
 
 ## Tests
+
+Each repo ships with a bash smoke test that verifies:
+1. `--help` works (no cast required)
+2. `--mode demo` produces a forecast
+3. `--mode demo --json` is valid JSON
+4. Unknown modes are rejected
+5. `--mode onchain` requires `--governor` and `--proposal-id`
+6. Bad addresses and bad proposal ids are rejected
+7. Unknown flags and bad chains are rejected
+8. The cast-missing error is clear (when cast is not installed)
 
 ```bash
 bash tests/test_forecast_smoke.sh
 ```
 
-The test suite covers the engine's heuristics, the JSON output schema, and (when run with `cast` installed) a live RPC smoke test against Pharos Pacific Mainnet.
+The test runs offline by default. If cast is installed, you can extend it with a live test (the script hits `cast call` on the supplied governor address).
+
+## Reference docs
+
+The skill ships with two reference documents that explain the model and the supported governors in depth:
+
+- `references/forecasting-model.md` — the math behind the label thresholds and the linear extrapolation
+- `references/governors.md` — the supported OZ Governor / Compound Bravo / Snapshot interfaces, function selectors, and how to add a new governor type
+- `examples/sample-output.md` — an annotated example of the text report
 
 ## Repository layout
 
 ```
-.
-├── README.md                  # this file
-├── SKILL.md                   # Agent-side description (loaded by Claude/Codex/etc.)
-├── scripts/
-│   └── forecast.sh          # bash + cast engine — the entire skill
+QuorumReach/
+├── SKILL.md              # Skill contract (Capability Index, Error Handling, Security Reminders)
+├── README.md             # This file
+├── foundry.toml          # Minimal config so cast can find the project root
+├── LICENSE               # MIT
 ├── assets/
-│   └── networks.json          # Pharos Skill Engine network config
+│   └── networks.json     # mainnet + testnet chain config (read by every script)
+├── scripts/
+│   └── forecast.sh          # The single bash script that does the work
+├── references/
+│   ├── forecasting-model.md
+│   └── governors.md
+├── examples/
+│   └── sample-output.md
 └── tests/
-    └── test_*.sh              # bash smoke test
+    └── test_forecast_smoke.sh   # Offline smoke test (no cast required)
 ```
+
 ## License
 
-MIT-0 — free to use, modify, redistribute. No attribution required.
+MIT — see `LICENSE`.

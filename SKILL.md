@@ -1,221 +1,159 @@
 ---
-name: quorum-forecaster
-description: >
-  REQUIRED for any task that requires predicting whether an on-chain or
-  off-chain governance proposal will reach quorum before the voting
-  deadline closes. Invoke when the user asks to "forecast quorum",
-  "will this proposal pass", "quorum reach", "is this DAO vote going
-  to make it", "voting projection", "governance forecast", or wants a
-  per-proposal breakdown of (current votes, quorum threshold, time
-  remaining, projected final votes, confidence). Use the bundled
-  `src/quorum_forecast.py` engine to pull live proposal state via
-  JSON-RPC (any EVM-compatible chain) and the Snapshot GraphQL API
-  (off-chain governance).
-  Do not attempt quorum forecasting without reading this skill.
+name: QuorumReach
+description: AI agent skill for predicting whether a governance proposal will reach quorum before its voting deadline closes. Works with OpenZeppelin Governor and Compound Bravo contracts via cast (Foundry), and can be extended for Snapshot. Use this skill whenever an agent needs to forecast a proposal outcome, time a vote, or assess a DAO's health. Triggers on phrases like "will this proposal pass", "quorum forecast", "governance vote predictor", "pharos governance", "OZ governor forecast", "compound bravo forecast".
 version: 2.0.0
-requires: read
-bins: [bash, cast, jq]
 author: Meenah57
-
-tags: [pharos, blockchain, agent-skill]
+requires: read
+bins: [bash, cast, jq, awk]
+network: pharos
+tags: [governance, quorum, voting, openzeppelin, compound-bravo, snapshot, pharos, foundry, bash]
 agents: [claude, codex, gemini, openclaw]
 ---
 
+# QuorumReach — Quorum Forecaster
 
-# Quorum Forecaster
+A bash + cast (Foundry) skill that forecasts whether an on-chain governance proposal will reach quorum before its voting deadline closes. Three modes:
 
-Predict whether a governance proposal will reach quorum before its
-voting deadline closes. Works for:
+- **`onchain`** (default) — query an OpenZeppelin Governor or Compound Bravo contract via `cast call`
+- **`demo`** — synthetic forecast, no cast or RPC needed
+- **`snapshot`** — stub for Snapshot Hub GraphQL; extend it yourself
 
-- **On-chain governors** — Compound (Bravo), OpenZeppelin Governor,
-  Tally-style custom governors, and Pharos-native governance.
-- **Off-chain governors** — Snapshot (used by most DAOs that don't
-  pay gas for voting).
+## How it scores
 
-The skill ships a Python engine that:
+Let `elapsed = (head - start) / (end - start)` ∈ [0, 1].
 
-1. Detects the governor type (on-chain vs Snapshot) from the input.
-2. Pulls the current vote tally, quorum threshold, and deadline.
-3. Pulls the vote history of the last N proposals to learn the typical
-   voting curve (front-loaded vs back-loaded vs linear).
-4. Fits a curve to the *current* proposal's partial vote timeline and
-   projects the final vote count at deadline.
-5. Returns a labeled outcome: `MISSED`, `UNLIKELY`, `REACH_QUORUM`,
-   `LIKELY`, `GUARANTEED`, plus a confidence 0–1.
+| Case | Projection |
+|---|---|
+| `elapsed < 0.001` (voting just started) | current votes (history mean is a stub in this version) |
+| `elapsed >= 0.001` | **linear extrapolation**: `projected = current / elapsed` |
 
-## When to use
+| Ratio range | Label | Confidence |
+|---|---|---|
+| 0.00 – 0.25 | `MISSED` | 0.90 |
+| 0.25 – 0.75 | `UNLIKELY` | 0.70 |
+| 0.75 – 1.00 | `REACH_QUORUM` | 0.55 |
+| 1.00 – 1.30 | `LIKELY` | 0.75 |
+| 1.30+ | `GUARANTEED` | 0.90 |
 
-- The user asks "will proposal X reach quorum?"
-- The user wants a single "quorum forecast" number for a list of
-  active proposals.
-- The user wants to know *when* the quorum threshold will be crossed
-  (useful for vote-trolling / governance dashboards).
-- The user wants to compare the projected turnout to past proposals
-  on the same DAO.
+## Quick Actions
 
-## When NOT to use
-
-- Snapshot proposals whose space is unknown — you'll need the
-  `space` slug (e.g. `aave.eth`, `ens.eth`).
-- DAOs that use a custom voting-escrow with a non-standard quorum
-  (the engine supports a manual `--quorum-absolute` override).
-- Snapshot proposals that are still in "pending" state (no votes
-  recorded yet). Wait until the proposal goes active.
-
-## Inputs
-
-| Input              | Required | Description                                            |
-|--------------------|----------|--------------------------------------------------------|
-| `governor`         | yes      | Governor contract address (on-chain) OR Snapshot space |
-| `proposal_id`      | yes      | Proposal id (on-chain) or Snapshot proposal id        |
-| `rpc_url`          | depends  | JSON-RPC endpoint (required for on-chain governors)    |
-| `mode`             | no       | `auto` (default), `onchain`, or `snapshot`             |
-| `lookback`         | no       | How many past proposals to use for curve fitting (default 8) |
-| `quorum_absolute`  | no       | Override quorum threshold (decimal token units)        |
-| `format`           | no       | `text` (default), `json`, `markdown`, `html`           |
-
-## Outputs
-
-A structured report with:
-
-- Current `for`, `against`, `abstain` vote totals.
-- Quorum threshold (and source — on-chain read vs supplied override).
-- Time remaining until deadline.
-- Projected final vote total.
-- **Forecast label** + confidence 0–1.
-- A short human-readable explanation.
-
-### Forecast labels
-
-| Label          | Meaning                                                       |
-|----------------|---------------------------------------------------------------|
-| `MISSED`       | Projected final < 25% of quorum. Proposal will fail.          |
-| `UNLIKELY`     | Projected final < 75% of quorum. Proposal almost certainly fails. |
-| `REACH_QUORUM` | Projected final between 75% and 100% of quorum. Could go either way. |
-| `LIKELY`       | Projected final between 100% and 130% of quorum. Should pass. |
-| `GUARANTEED`   | Projected final > 130% of quorum. Already locked in.          |
-
-## Quick start
-
-```bash
-# 1. Install
-pip install -r requirements.txt
-
-# 2. Forecast an on-chain governor proposal (Pharos mainnet)
-python src/quorum_forecast.py \
-  --governor 0xGovernorContract \
-  --proposal-id 42 \
-  --rpc-url https://rpc.pharos.xyz
-
-# 3. Forecast a Snapshot proposal
-python src/quorum_forecast.py \
-  --governor aave.eth \
-  --proposal-id 0xabc123... \
-  --mode snapshot
-
-# 4. Get a JSON report
-python src/quorum_forecast.py \
-  --governor 0xGovernorContract \
-  --proposal-id 42 \
-  --rpc-url https://rpc.pharos.xyz \
-  --format json > forecast.json
+### Forecast a real proposal
+```
+Will proposal 42 on OZ Governor 0xabc...def reach quorum on Pharos mainnet?
 ```
 
-## Agent invocation pattern
+### Run the demo
+```
+Run the quorum forecaster demo
+```
 
-When the user asks for a quorum forecast, the Agent should:
+### Get the forecast as JSON
+```
+Forecast proposal 42 on Governor 0xabc... and return JSON
+```
 
-1. Determine whether the proposal is on-chain or Snapshot. If unclear,
-   ask the user; the heuristic is "did the user supply a 0x address
-   for the governor?" — yes means on-chain.
-2. Resolve the RPC URL from the chain the user mentions (e.g. Pharos
-   mainnet → `https://rpc.pharos.xyz`).
-3. Run `src/quorum_forecast.py` with the parameters above.
-4. Surface the forecast label, confidence, and time remaining as the
-   top of the response. Optionally pipe through `src/report.py` for a
-   formatted report.
+## Invocation
+
+```bash
+# On-chain forecast (default mode)
+bash scripts/forecast.sh --mode onchain \
+  --governor 0xGOVERNOR_ADDRESS --proposal-id 42 --chain mainnet
+
+# Demo
+bash scripts/forecast.sh --mode demo
+
+# JSON output
+bash scripts/forecast.sh --mode onchain --governor 0xADDR --proposal-id 42 --json
+
+# Override the quorum
+bash scripts/forecast.sh --mode onchain --governor 0xADDR --proposal-id 42 \
+  --quorum-absolute 4000000
+```
+
+## Flags
+
+| Flag | Description |
+|---|---|
+| `--mode <onchain \| demo \| snapshot>` | Forecasting mode (default: onchain) |
+| `--governor 0xADDR` | On-chain governor contract address (required for onchain) |
+| `--proposal-id N` | Proposal id as a non-negative integer (required for onchain) |
+| `--chain <mainnet \| testnet>` | Pharos chain to read from (default: mainnet) |
+| `--lookback N` | Number of past proposals to use for soft cap (default: 5; history mean is currently a stub) |
+| `--quorum-absolute N` | Override the on-chain quorum (raw token units) |
+| `--json` | Output as JSON (for agent consumption) |
+| `-h`, `--help` | Show the help text |
+
+## Supported governors
+
+**OpenZeppelin Governor** (default — read by `--mode onchain`):
+
+| Function | Selector |
+|---|---|
+| `state(uint256)` | `0x3e4f49e6` |
+| `proposalVotes(uint256)` | `0xda95691a` |
+| `proposalSnapshot(uint256)` | `0x462aca47` |
+| `proposalDeadline(uint256)` | `0x2e03ce1b` |
+| `quorum(uint256)` | `0xf8ce5601` |
+
+**Compound Bravo** (`GovernorAlpha` / `GovernorBravo`) — supported; pass `--mode onchain` and the script auto-detects the ABI. See `references/governors.md` for the Bravo selectors.
+
+**Snapshot** (off-chain) — stub in this version. Extend the script with a Snapshot Hub GraphQL query against `https://hub.snapshot.org/graphql`.
+
+## Networks
+
+| Network | Chain ID | RPC URL |
+|---|---:|---|
+| mainnet (Pacific Ocean) | 1672 | `https://rpc.pharos.xyz` |
+| atlantic-testnet | 688689 | `https://atlantic.dplabs-internal.com` |
+
+Chain config is read from `assets/networks.json` at startup. Edit that file to add private RPC endpoints.
+
+## Dependencies
+
+- **Foundry** (gives you `cast`) — install with `curl -L https://foundry.paradigm.xyz | bash && foundryup`
+- **bash 4+** — preinstalled on macOS, Ubuntu 20+, most Linux
+- **awk** — preinstalled on every Unix (used for float math)
+- **jq** — required only for `--json` output
+
+## Security model
+
+- The skill is **read-only** — it never imports, reads, or stores a private key.
+- It reads governance state via `eth_call` (read-only RPC) — it cannot move funds or vote on proposals.
+- It never submits a transaction, never writes to disk, never phones home.
+- The only network call is to the user-configured RPC URL (or the Snapshot Hub GraphQL endpoint, if you extend the snapshot mode).
 
 ## Error handling
 
-| Error                       | Cause                                  | Action |
-|-----------------------------|----------------------------------------|--------|
-| `unknown governor type`     | Contract doesn't match known patterns  | Use `--mode onchain` + `--quorum-absolute` |
-| `proposal not found`        | Bad proposal id                        | Verify proposal id via block explorer |
-| `voting not started`        | Proposal still pending                 | Tell the user, ask for a later check |
-| `voting already ended`      | Past deadline                          | Return the final vote count instead of forecast |
-| `snapshot api timeout`      | Snapshot hub down                      | Retry, or fall back to manual tally |
+- Missing cast → "Error: 'cast' not found. Install Foundry..."
+- Unknown mode → "Error: unknown mode: bogus (use 'onchain', 'demo', or 'snapshot')"
+- Missing `--governor` / `--proposal-id` for onchain → clear error + usage hint
+- Bad address / bad proposal id → format error
+- Bad chain → "Unknown chain: bogus (use 'mainnet' or 'testnet')"
+- Cast returns empty for `state(proposalId)` → "governor call returned empty — is the address a real OZ Governor?"
 
-## Limitations
+## Reference docs
 
-- The forecaster assumes the historical voting curve of the DAO is a
-  reasonable prior for the current proposal. Sudden shifts in turnout
-  (e.g. an airdrop announcement) won't be detected.
-- For very long voting periods (>2 weeks), curve fit degrades; the
-  engine caps `--lookback` and falls back to linear extrapolation.
-- Snapshot proposals with quorum computed as a percentage of total
-  supply require a known supply; if the engine can't find one, the
-  user must supply `--quorum-absolute`.
+- `references/forecasting-model.md` — the math behind the label thresholds and the linear extrapolation
+- `references/governors.md` — the supported OZ Governor / Compound Bravo / Snapshot interfaces, function selectors, and how to add a new governor type
+- `examples/sample-output.md` — an annotated example of the text report
 
-## Prerequisites
+## Repository layout
 
-```bash
-python3 --version   # 3.10+
 ```
-
-The skill uses only the Python standard library (`urllib.request`,
-`json`, `argparse`). No third-party packages, no Foundry, no
-`pip install` step.
-
-The skill is **read-only** — no private key is required or accepted.
-
-## Network Configuration
-
-Network RPC URLs and chain IDs are sourced from
-`assets/networks.json` (canonical Pharos Skill Engine schema). To
-add a new network, append a new object to the `networks` array and
-update `defaultNetwork` if needed.
-
-## Capability Index
-
-| User Need | Capability | Detailed Instructions |
-|---|---|---|
-| Default entry point | CLI with a `--wallet` / `--safe` / `--governor` flag | See the `Usage` section in the README; the CLI takes a target identifier and prints a Markdown or JSON report |
-| JSON for an agent | `--format json` | Output is a structured payload that an agent can import directly |
-| Markdown report | pipe to `report.py` | `python3 src/... --format json \| python3 src/report.py --format markdown --out X.md` |
-| Bounded scan | `--max-blocks` / `--lookback` / `--block-count` | Default scans are bounded to stay within the public Pharos RPC's request rate |
-| Network switch | `--chain mainnet\|testnet` | Default is Atlantic testnet; pass `--chain mainnet` to switch |
-
-## General Error Handling
-
-| Error Scenario | CLI Error Signature | Handling |
-|---|---|---|
-| Target not on the specified chain | `null` receipt / no data returned | Exit with "not found on chain=X; try `--chain <other>`" |
-| RPC rate-limited (HTTP 429) | Backoff response from RPC | Built-in exponential backoff (0.4s, 0.8s, 1.6s, 3.2s) with 4 retry attempts |
-| Bad target format | Validator rejects the input | CLI prints a usage hint; no RPC call is made |
-| Missing required arg | `argparse` exits with usage | CLI prints required args; user re-invokes with the right flags |
-| No matches (clean target) | Empty result / `verdict: clean` | Normal case — emit the "no issues" report, no error |
-
-## Security Reminders
-
-- **Private Key Protection** — the skill is read-only and never
-  accepts a private key. Do not paste keys into chat.
-- **Network Confirmation** — before any future write-skill
-  integration, confirm the network with the user.
-- **No External API** — the skill does not call any third-party
-  service beyond the Pharos RPC and PharosScan (where applicable).
-  All data is fetched directly.
-
-## Write Operation Pre-checks
-
-This skill is **read-only** and never submits a transaction, so the
-full 4-step write pre-check is not applicable. If a future version
-adds a write path, the pre-checks must include:
-
-1. **Private Key Check** — `--private-key` / `$PRIVATE_KEY` must be
-   set; warn if the key has zero balance.
-2. **Derive Public Address** — `cast wallet address`; confirm the
-   key is for the intended network.
-3. **Network Confirmation** — prompt the user with "You are about
-   to write to Pacific mainnet. Continue? (y/N)".
-4. **Automatic Balance Check** — `cast balance`; if below the
-   operation cost + gas, abort with a clear error.
+QuorumReach/
+├── SKILL.md              # This file
+├── README.md             # Full documentation
+├── foundry.toml          # Minimal config so cast can find the project root
+├── LICENSE               # MIT
+├── assets/
+│   └── networks.json     # mainnet + testnet chain config
+├── scripts/
+│   └── forecast.sh       # The single bash script that does the work
+├── references/
+│   ├── forecasting-model.md
+│   └── governors.md
+├── examples/
+│   └── sample-output.md
+└── tests/
+    └── test_forecast_smoke.sh   # Offline smoke test
+```
